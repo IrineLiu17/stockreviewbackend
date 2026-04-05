@@ -58,49 +58,51 @@ class LLMService:
             response.raise_for_status()
             data = response.json()
             return (data.get("choices") or [{}])[0].get("message", {}).get("content", "")
-        self,
-        note,
-        context: dict
-    ) -> AsyncIterator[str]:
-        """Stream analysis (typing effect)"""
+
+    async def stream_analysis(self, note, context: dict) -> AsyncIterator[str]:
+        """Stream analysis (typing effect) for the AgentService stream endpoint."""
+        if not self.api_key:
+            raise ValueError("DEEPSEEK_API_KEY or OPENAI_API_KEY not set")
+
         from app.services.agent_service import AgentService
+
         agent = AgentService()
         prompt = agent._build_prompt(note, context)
-        
+
         async with httpx.AsyncClient(timeout=120.0) as client:
             url = f"{self.base_url}/chat/completions"
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json"
             }
-            
+
             payload = {
                 "model": self.model,
-                "messages": [
-                    {"role": "user", "content": prompt}
-                ],
+                "messages": [{"role": "user", "content": prompt}],
                 "temperature": settings.AGENT_TEMPERATURE,
                 "stream": True
             }
-            
+
             async with client.stream("POST", url, headers=headers, json=payload) as response:
                 response.raise_for_status()
-                
+
                 async for line in response.aiter_lines():
-                    if not line.strip():
+                    if not line.strip() or not line.startswith("data: "):
                         continue
-                    
-                    if line.startswith("data: "):
-                        data_str = line[6:]
-                        if data_str == "[DONE]":
-                            break
-                        
-                        try:
-                            data = json.loads(data_str)
-                            if "choices" in data and len(data["choices"]) > 0:
-                                delta = data["choices"][0].get("delta", {})
-                                content = delta.get("content", "")
-                                if content:
-                                    yield content
-                        except json.JSONDecodeError:
-                            continue
+
+                    data_str = line[6:].strip()
+                    if data_str == "[DONE]":
+                        break
+
+                    try:
+                        data = json.loads(data_str)
+                    except json.JSONDecodeError:
+                        continue
+
+                    choices = data.get("choices") or []
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta", {}) or {}
+                    content = delta.get("content") or ""
+                    if content:
+                        yield content

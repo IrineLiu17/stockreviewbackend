@@ -4,8 +4,6 @@ Handles JWT token verification and user isolation
 """
 from fastapi import HTTPException, Header, Depends
 from typing import Optional
-import jwt
-from app.config import settings
 from supabase import Client
 from app.database import get_supabase
 
