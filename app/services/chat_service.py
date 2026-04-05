@@ -247,6 +247,8 @@ class ChatService:
 """
 
     def _is_market_chat(self, text: str) -> bool:
+        if self.market_data_service.extract_symbol(text):
+            return True
         keywords = [
             "行情", "A股", "大盘", "涨", "跌", "追", "抄", "割", "躺", "股票",
             "仓位", "止损", "买", "卖", "代码", "个股", "上证", "深证", "创业板"
@@ -263,6 +265,8 @@ class ChatService:
             "基本面", "分析", "估值", "财务", "业绩", "roe", "pe", "pb",
             "怎么看", "这票", "这只股", "还能拿吗", "能买吗", "值不值", "推荐"
         ]
+        if self.market_data_service.extract_symbol(text) and ("怎么样" in text or "咋样" in text):
+            return True
         return bool(market_context or fundamental_context) and any(
             keyword.lower() in text.lower() for keyword in analysis_keywords
         )
