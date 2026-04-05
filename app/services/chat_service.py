@@ -30,11 +30,11 @@ class ChatService:
         context = self._build_context(selected_notes)
         messages = self._build_messages(message, context)
         reply = await self.llm_service.generate_with_messages(messages)
-        cleaned_reply = reply.strip() or "今天先从一句最真实的感受开始也很好，我会继续陪你慢慢复盘。"
+        cleaned_reply = self._clean_reply(reply) or "今天先从一句最真实的感受开始也很好，我会继续陪你慢慢复盘。"
 
         return {
             "reply": cleaned_reply,
-            "references": [self._format_reference(note.date) for note in selected_notes],
+            "references": list(dict.fromkeys(self._format_reference(note.date) for note in selected_notes)),
             "used_reflection_count": len(selected_notes)
         }
 
@@ -100,7 +100,7 @@ class ChatService:
 3 不编造外部市场事实，不假装知道实时新闻、行情或财报
 4 不给具体股票买卖建议，不做确定性判断
 5 尽量给一个用户明天就能做到的小动作
-6 控制在180字以内，像聊天，不要用 markdown，不要分标题
+6 控制在180字以内，像聊天，不要用 markdown，不要分标题，不要换行
 """
 
         user_prompt = f"""
@@ -117,6 +117,21 @@ class ChatService:
             {"role": "system", "content": system_prompt.strip()},
             {"role": "user", "content": user_prompt.strip()},
         ]
+
+    def _clean_reply(self, reply: str | None) -> str:
+        """
+        Enforce "chatty" response shape:
+        - single line (no newlines)
+        - <= 180 chars (approx; good enough for CN text)
+        """
+        text = (reply or "").strip()
+        if not text:
+            return ""
+        # Collapse whitespace/newlines to a single space.
+        text = " ".join(text.split())
+        if len(text) > 180:
+            text = text[:180].rstrip()
+        return text
 
     def _extract_feedback_summary(self, ai_feedback: str | None) -> str:
         if not ai_feedback:
