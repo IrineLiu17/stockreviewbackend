@@ -22,6 +22,7 @@ class ChatService:
     async def chat_with_coach(self, user_id: str, message: str) -> dict:
         notes = await self.note_service.list_notes(user_id=user_id, limit=12)
         market_context = await self.market_data_service.get_market_context(message)
+        market_chat = self._is_market_chat(message)
 
         if not notes and not market_context:
             return {
@@ -30,13 +31,12 @@ class ChatService:
                 "used_reflection_count": 0
             }
 
-        if self._is_market_chat(message) and not market_context:
-            if not notes:
-                return {
-                    "reply": "如果你想聊A股行情，直接告诉我股票代码、今天大概涨跌多少，以及你现在想追、抄、割还是先躺着，我就能陪你一起把动作想清楚。",
-                    "references": [],
-                    "used_reflection_count": 0
-                }
+        if market_chat and not market_context:
+            return {
+                "reply": "如果你想聊这只A股，告诉我股票代码、今天大概涨跌多少，以及你现在更想追、抄、割还是先躺着，我再陪你把这笔动作拆开看。",
+                "references": [],
+                "used_reflection_count": 0
+            }
 
         selected_notes = self._select_relevant_notes(notes, message)
         reflection_context = self._build_context(selected_notes)
@@ -114,6 +114,7 @@ class ChatService:
 
         name = market_context.get("name") or ""
         display_name = f"{name}（{market_context['symbol']}）" if name else market_context["symbol"]
+        source = market_context.get("source") or "unknown"
         user_hint_parts = []
         if market_context.get("user_change_hint"):
             user_hint_parts.append(f"用户口述涨跌：{market_context['user_change_hint']}")
@@ -123,6 +124,7 @@ class ChatService:
 
         return (
             f"标的：{display_name}\n"
+            f"数据来源：{source}\n"
             f"最近交易日：{market_context.get('trade_date') or '未知'}\n"
             f"收盘价：{market_context.get('close')}\n"
             f"涨跌幅：{market_context.get('pct_chg')}%\n"

@@ -4,6 +4,7 @@ Fetches lightweight A-share quote context from Tushare for coach chat.
 """
 from __future__ import annotations
 
+import asyncio
 import re
 from typing import Optional
 
@@ -19,18 +20,44 @@ class ChinaMarketDataService:
 
     async def get_market_context(self, text: str) -> Optional[dict]:
         symbol = self.extract_symbol(text)
-        if not symbol or not settings.TUSHARE_TOKEN:
+        if not symbol:
+            print("[ChinaMarketDataService] No symbol found in user message")
             return None
 
         ts_code = self._to_ts_code(symbol)
-        quote = await self._fetch_latest_daily_quote(ts_code)
+        print(f"[ChinaMarketDataService] symbol={symbol} ts_code={ts_code}")
+
+        quote: Optional[dict] = None
+        source = ""
+
+        if settings.TUSHARE_TOKEN:
+            print(f"[ChinaMarketDataService] Requesting Tushare for {ts_code}")
+            quote = await self._fetch_latest_daily_quote(ts_code)
+            if quote:
+                source = "tushare"
+                print(f"[ChinaMarketDataService] Tushare success for {ts_code}")
+            else:
+                print(f"[ChinaMarketDataService] Tushare returned no data for {ts_code}")
+        else:
+            print("[ChinaMarketDataService] TUSHARE_TOKEN missing, skip Tushare")
+
         if not quote:
+            print(f"[ChinaMarketDataService] Requesting AkShare for {symbol}")
+            quote = await self._fetch_akshare_quote(symbol)
+            if quote:
+                source = "akshare"
+                print(f"[ChinaMarketDataService] AkShare success for {symbol}")
+            else:
+                print(f"[ChinaMarketDataService] AkShare returned no data for {symbol}")
+
+        if not quote:
+            print(f"[ChinaMarketDataService] No market context available for {symbol}")
             return None
 
         return {
             "symbol": symbol,
             "ts_code": ts_code,
-            "name": await self._fetch_stock_name(ts_code),
+            "name": await self._fetch_stock_name(ts_code) or quote.get("name", ""),
             "trade_date": quote.get("trade_date", ""),
             "close": quote.get("close"),
             "pct_chg": quote.get("pct_chg"),
@@ -42,6 +69,7 @@ class ChinaMarketDataService:
             "amount": quote.get("amount"),
             "user_intent": self.extract_user_intent(text),
             "user_change_hint": self.extract_change_hint(text),
+            "source": source,
         }
 
     def extract_symbol(self, text: str) -> Optional[str]:
@@ -101,6 +129,8 @@ class ChinaMarketDataService:
         return items[0] if items else None
 
     async def _fetch_stock_name(self, ts_code: str) -> str:
+        if not settings.TUSHARE_TOKEN:
+            return ""
         payload = {
             "api_name": "stock_basic",
             "token": settings.TUSHARE_TOKEN,
@@ -120,12 +150,73 @@ class ChinaMarketDataService:
                 response.raise_for_status()
                 body = response.json()
                 if body.get("code") != 0:
+                    print(f"[ChinaMarketDataService] Tushare error body={body}")
                     return None
                 return body.get("data")
-        except Exception:
+        except Exception as exc:
+            print(f"[ChinaMarketDataService] Tushare request failed: {exc}")
             return None
 
     def _records_to_dicts(self, data: dict) -> list[dict]:
         fields = data.get("fields") or []
         items = data.get("items") or []
         return [dict(zip(fields, row)) for row in items]
+
+    async def _fetch_akshare_quote(self, symbol: str) -> Optional[dict]:
+        try:
+            return await asyncio.to_thread(self._fetch_akshare_quote_sync, symbol)
+        except Exception as exc:
+            print(f"[ChinaMarketDataService] AkShare request failed: {exc}")
+            return None
+
+    def _fetch_akshare_quote_sync(self, symbol: str) -> Optional[dict]:
+        import akshare as ak
+
+        df = ak.stock_zh_a_hist(
+            symbol=symbol,
+            period="daily",
+            adjust="",
+        )
+        if df is None or df.empty:
+            return None
+
+        latest = df.iloc[-1]
+        trade_date = str(latest.get("日期", ""))
+        open_price = self._to_float(latest.get("开盘"))
+        close_price = self._to_float(latest.get("收盘"))
+        high_price = self._to_float(latest.get("最高"))
+        low_price = self._to_float(latest.get("最低"))
+        change = self._to_float(latest.get("涨跌额"))
+        pct_chg = self._to_float(latest.get("涨跌幅"))
+        volume = self._to_float(latest.get("成交量"))
+        amount = self._to_float(latest.get("成交额"))
+
+        name = ""
+        try:
+            spot_df = ak.stock_zh_a_spot_em()
+            matched = spot_df[spot_df["代码"].astype(str) == symbol]
+            if not matched.empty:
+                name = str(matched.iloc[0].get("名称", ""))
+        except Exception as exc:
+            print(f"[ChinaMarketDataService] AkShare spot lookup failed for {symbol}: {exc}")
+
+        return {
+            "trade_date": trade_date.replace("-", ""),
+            "open": open_price,
+            "close": close_price,
+            "high": high_price,
+            "low": low_price,
+            "change": change,
+            "pct_chg": pct_chg,
+            "vol": volume,
+            "amount": amount,
+            "name": name,
+        }
+
+    def _to_float(self, value) -> Optional[float]:
+        try:
+            if value is None or value == "":
+                return None
+            return float(value)
+        except Exception:
+            return None
