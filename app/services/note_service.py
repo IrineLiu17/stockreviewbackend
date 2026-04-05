@@ -4,7 +4,7 @@ Note Service - Handles database operations for reflection notes
 from typing import Optional, List
 from datetime import datetime
 from uuid import UUID
-from app.database import get_supabase
+from app.database import get_supabase_admin
 from app.models import ReflectionNoteResponse
 from supabase import Client
 
@@ -12,7 +12,8 @@ class NoteService:
     """Service for managing reflection notes"""
     
     def __init__(self):
-        self.supabase: Client = get_supabase()
+        # Use service role on server so reads won't be blocked by RLS.
+        self.supabase: Client = get_supabase_admin()
         self.table_name = "reflection_notes"
     
     async def create_note(

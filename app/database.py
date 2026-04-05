@@ -8,6 +8,7 @@ from typing import Optional
 
 # Supabase client
 supabase: Optional[Client] = None
+supabase_admin: Optional[Client] = None
 
 def get_supabase() -> Client:
     """Get Supabase client"""
@@ -15,6 +16,16 @@ def get_supabase() -> Client:
     if supabase is None:
         supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
     return supabase
+
+def get_supabase_admin() -> Client:
+    """
+    Get Supabase admin client (service role).
+    Use this for server-side DB reads/writes to avoid RLS blocking.
+    """
+    global supabase_admin
+    if supabase_admin is None:
+        supabase_admin = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_KEY)
+    return supabase_admin
 
 async def get_db_pool():
     """Get async PostgreSQL connection pool"""
