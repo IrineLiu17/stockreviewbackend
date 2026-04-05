@@ -72,6 +72,47 @@ class ChinaMarketDataService:
             "source": source,
         }
 
+    async def get_fundamental_context(self, text: str) -> Optional[dict]:
+        symbol = self.extract_symbol(text)
+        if not symbol or not settings.TUSHARE_TOKEN:
+            return None
+
+        ts_code = self._to_ts_code(symbol)
+        print(f"[ChinaMarketDataService] Requesting fundamentals for {ts_code}")
+
+        profile_task = self._fetch_stock_profile(ts_code)
+        valuation_task = self._fetch_daily_basic(ts_code)
+        finance_task = self._fetch_fina_indicator(ts_code)
+        profile, valuation, finance = await asyncio.gather(
+            profile_task, valuation_task, finance_task
+        )
+
+        if not profile and not valuation and not finance:
+            print(f"[ChinaMarketDataService] No fundamental data available for {ts_code}")
+            return None
+
+        return {
+            "symbol": symbol,
+            "ts_code": ts_code,
+            "name": (profile or {}).get("name", ""),
+            "industry": (profile or {}).get("industry", ""),
+            "market": (profile or {}).get("market", ""),
+            "list_date": (profile or {}).get("list_date", ""),
+            "trade_date": (valuation or {}).get("trade_date", ""),
+            "total_mv": self._to_float((valuation or {}).get("total_mv")),
+            "circ_mv": self._to_float((valuation or {}).get("circ_mv")),
+            "pe_ttm": self._to_float((valuation or {}).get("pe_ttm")),
+            "pb": self._to_float((valuation or {}).get("pb")),
+            "turnover_rate": self._to_float((valuation or {}).get("turnover_rate_f")),
+            "end_date": (finance or {}).get("end_date", ""),
+            "roe": self._to_float((finance or {}).get("roe")),
+            "or_yoy": self._to_float((finance or {}).get("or_yoy")),
+            "netprofit_yoy": self._to_float((finance or {}).get("q_dtprofit_yoy")),
+            "debt_to_assets": self._to_float((finance or {}).get("debt_to_assets")),
+            "grossprofit_margin": self._to_float((finance or {}).get("grossprofit_margin")),
+            "source": "tushare",
+        }
+
     def extract_symbol(self, text: str) -> Optional[str]:
         patterns = [
             r"\b(6\d{5}|0\d{5}|3\d{5})\b",
@@ -142,6 +183,45 @@ class ChinaMarketDataService:
             return ""
         items = self._records_to_dicts(data)
         return str(items[0].get("name", "")) if items else ""
+
+    async def _fetch_stock_profile(self, ts_code: str) -> Optional[dict]:
+        payload = {
+            "api_name": "stock_basic",
+            "token": settings.TUSHARE_TOKEN,
+            "params": {"ts_code": ts_code},
+            "fields": "ts_code,symbol,name,industry,market,list_date",
+        }
+        data = await self._post_tushare(payload)
+        if not data:
+            return None
+        items = self._records_to_dicts(data)
+        return items[0] if items else None
+
+    async def _fetch_daily_basic(self, ts_code: str) -> Optional[dict]:
+        payload = {
+            "api_name": "daily_basic",
+            "token": settings.TUSHARE_TOKEN,
+            "params": {"ts_code": ts_code, "limit": 1},
+            "fields": "ts_code,trade_date,total_mv,circ_mv,pe_ttm,pb,turnover_rate_f",
+        }
+        data = await self._post_tushare(payload)
+        if not data:
+            return None
+        items = self._records_to_dicts(data)
+        return items[0] if items else None
+
+    async def _fetch_fina_indicator(self, ts_code: str) -> Optional[dict]:
+        payload = {
+            "api_name": "fina_indicator",
+            "token": settings.TUSHARE_TOKEN,
+            "params": {"ts_code": ts_code, "limit": 1},
+            "fields": "ts_code,end_date,roe,or_yoy,q_dtprofit_yoy,debt_to_assets,grossprofit_margin",
+        }
+        data = await self._post_tushare(payload)
+        if not data:
+            return None
+        items = self._records_to_dicts(data)
+        return items[0] if items else None
 
     async def _post_tushare(self, payload: dict) -> Optional[dict]:
         try:

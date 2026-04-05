@@ -22,11 +22,20 @@ class ChatService:
     async def chat_with_coach(self, user_id: str, message: str) -> dict:
         notes = await self.note_service.list_notes(user_id=user_id, limit=12)
         market_context = await self.market_data_service.get_market_context(message)
+        fundamental_context = await self.market_data_service.get_fundamental_context(message)
         market_chat = self._is_market_chat(message)
+        analysis_mode = self._is_analysis_mode(message, market_context, fundamental_context)
 
         if not notes and not market_context:
             return {
                 "reply": "我是小稳教练。你还没有复盘记录，先随便写一句今天的交易感受也可以；如果你想聊A股，也可以直接告诉我标的、涨跌和你现在最想做的动作。",
+                "references": [],
+                "used_reflection_count": 0
+            }
+
+        if self._is_recommend_request(message) and not market_context:
+            return {
+                "reply": "我不直接替你推荐股票，但如果你给我一只A股代码，或告诉我你更想找稳一点、成长一点还是低估值一点的票，我可以按框架陪你拆开看。",
                 "references": [],
                 "used_reflection_count": 0
             }
@@ -41,10 +50,13 @@ class ChatService:
         selected_notes = self._select_relevant_notes(notes, message)
         reflection_context = self._build_context(selected_notes)
         market_context_text = self._build_market_context_text(market_context)
+        fundamental_context_text = self._build_fundamental_context_text(fundamental_context)
         messages = self._build_messages(
             message=message,
             reflection_context=reflection_context,
             market_context=market_context_text,
+            fundamental_context=fundamental_context_text,
+            analysis_mode=analysis_mode,
         )
         reply = await self.llm_service.generate_with_messages(messages)
         cleaned_reply = self._clean_reply(reply) or "今天先从一句最真实的感受开始也很好，我会继续陪你慢慢复盘。"
@@ -135,21 +147,39 @@ class ChatService:
             f"{user_hint}"
         )
 
-    def _build_messages(self, message: str, reflection_context: str, market_context: str) -> list[dict]:
-        system_prompt = """
-你叫小稳教练，是一位温和、稳定、值得信赖的交易复盘陪伴教练。
-你只能基于用户提供的问题，以及上下文里的复盘记录和A股事实数据来回答；如果上下文里没有足够信息，要明确说“这一点我暂时还看不出来”。
+    def _build_fundamental_context_text(self, fundamental_context: dict | None) -> str:
+        if not fundamental_context:
+            return "暂无A股基本面数据。"
 
-回答时必须遵守：
-1 语气温和，先肯定用户愿意复盘或提问这件事
-2 回答优先聚焦用户自己的交易行为、情绪模式和风险节奏
-3 只有在上下文里明确给出A股事实数据时，才能引用行情；绝不能编造实时新闻、行情或财报
-4 如果用户在聊A股，但缺少股票代码、涨跌幅或动作倾向，就礼貌追问这三项里缺的关键信息
-5 不给确定性的买卖指令，不替用户下结论，只做条件化提醒和风控陪伴
-6 尽量给一个用户明天或下一笔交易就能做到的小动作
-7 如果有行情数据，先用一句人话解释当前局面，再回到用户的情绪与执行
-8 控制在180字以内，像聊天，不要用 markdown，不要分标题，不要换行
-"""
+        name = fundamental_context.get("name") or ""
+        display_name = f"{name}（{fundamental_context['symbol']}）" if name else fundamental_context["symbol"]
+        return (
+            f"标的：{display_name}\n"
+            f"行业：{fundamental_context.get('industry') or '未知'}\n"
+            f"市场板块：{fundamental_context.get('market') or '未知'}\n"
+            f"上市日期：{fundamental_context.get('list_date') or '未知'}\n"
+            f"总市值(万元)：{fundamental_context.get('total_mv')}\n"
+            f"流通市值(万元)：{fundamental_context.get('circ_mv')}\n"
+            f"PE(TTM)：{fundamental_context.get('pe_ttm')}\n"
+            f"PB：{fundamental_context.get('pb')}\n"
+            f"换手率：{fundamental_context.get('turnover_rate')}\n"
+            f"ROE：{fundamental_context.get('roe')}\n"
+            f"营收同比：{fundamental_context.get('or_yoy')}\n"
+            f"扣非净利同比：{fundamental_context.get('netprofit_yoy')}\n"
+            f"资产负债率：{fundamental_context.get('debt_to_assets')}\n"
+            f"毛利率：{fundamental_context.get('grossprofit_margin')}\n"
+            f"财务期末：{fundamental_context.get('end_date') or '未知'}"
+        )
+
+    def _build_messages(
+        self,
+        message: str,
+        reflection_context: str,
+        market_context: str,
+        fundamental_context: str,
+        analysis_mode: bool,
+    ) -> list[dict]:
+        system_prompt = self._build_system_prompt(analysis_mode)
 
         user_prompt = f"""
 用户当前问题：
@@ -160,6 +190,9 @@ class ChatService:
 
 这是当前可用的A股事实数据：
 {market_context}
+
+这是当前可用的A股基本面数据：
+{fundamental_context}
 
 请基于这些记录，像“小稳教练”一样给出一段自然、温和、鼓励式的回复。
 """
@@ -184,11 +217,58 @@ class ChatService:
             text = text[:180].rstrip()
         return text
 
+    def _build_system_prompt(self, analysis_mode: bool) -> str:
+        if analysis_mode:
+            return """
+你叫小稳教练，现在要以“有实战感的A股交易前辈”身份回答。
+你只能基于上下文里的A股事实数据、基本面数据和用户复盘记录来回答；信息不够时要直接说看不出来。
+
+回答时必须遵守：
+1 语气自然，像真人，不要每次都模板式夸奖用户
+2 先说你对这只票当前状态的一个判断框架，比如偏趋势、偏震荡、偏估值、偏业绩、偏情绪
+3 如果有基本面数据，就用1到2个最关键指标说人话，不要堆术语
+4 不直接推荐买哪只股票，不给确定性买卖指令，不承诺收益
+5 要指出一个主要风险，再给一个可执行的观察点
+6 像聊天，不要 markdown，不要分标题，不要换行，控制在220字以内
+"""
+        return """
+你叫小稳教练，是一位温和、稳定、值得信赖的交易复盘陪伴教练。
+你只能基于用户提供的问题，以及上下文里的复盘记录和A股事实数据来回答；如果上下文里没有足够信息，要明确说“这一点我暂时还看不出来”。
+
+回答时必须遵守：
+1 语气自然温和，不要过度模板化
+2 回答优先聚焦用户自己的交易行为、情绪模式和风险节奏
+3 只有在上下文里明确给出A股事实数据时，才能引用行情；绝不能编造实时新闻、行情或财报
+4 如果用户在聊A股，但缺少股票代码、涨跌幅或动作倾向，就礼貌追问这三项里缺的关键信息
+5 不给确定性的买卖指令，不替用户下结论，只做条件化提醒和风控陪伴
+6 尽量给一个用户明天或下一笔交易就能做到的小动作
+7 如果有行情数据，先用一句人话解释当前局面，再回到用户的情绪与执行
+8 控制在180字以内，像聊天，不要用 markdown，不要分标题，不要换行
+"""
+
     def _is_market_chat(self, text: str) -> bool:
         keywords = [
             "行情", "A股", "大盘", "涨", "跌", "追", "抄", "割", "躺", "股票",
             "仓位", "止损", "买", "卖", "代码", "个股", "上证", "深证", "创业板"
         ]
+        return any(keyword in text for keyword in keywords)
+
+    def _is_analysis_mode(
+        self,
+        text: str,
+        market_context: dict | None,
+        fundamental_context: dict | None,
+    ) -> bool:
+        analysis_keywords = [
+            "基本面", "分析", "估值", "财务", "业绩", "roe", "pe", "pb",
+            "怎么看", "这票", "这只股", "还能拿吗", "能买吗", "值不值", "推荐"
+        ]
+        return bool(market_context or fundamental_context) and any(
+            keyword.lower() in text.lower() for keyword in analysis_keywords
+        )
+
+    def _is_recommend_request(self, text: str) -> bool:
+        keywords = ["推荐", "荐股", "还有什么股", "买什么股", "推一个股"]
         return any(keyword in text for keyword in keywords)
 
     def _extract_feedback_summary(self, ai_feedback: str | None) -> str:
