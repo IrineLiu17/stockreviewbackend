@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
+from app.services.china_market_data_service import ChinaMarketDataService
 from app.services.note_service import NoteService
 from app.services.llm_service import LLMService
 
@@ -16,19 +17,35 @@ class ChatService:
     def __init__(self):
         self.note_service = NoteService()
         self.llm_service = LLMService()
+        self.market_data_service = ChinaMarketDataService()
 
     async def chat_with_coach(self, user_id: str, message: str) -> dict:
         notes = await self.note_service.list_notes(user_id=user_id, limit=12)
-        if not notes:
+        market_context = await self.market_data_service.get_market_context(message)
+
+        if not notes and not market_context:
             return {
-                "reply": "我是小稳教练。你还没有复盘记录，先随便写一句今天的交易感受也可以，我会再陪你一起慢慢看。",
+                "reply": "我是小稳教练。你还没有复盘记录，先随便写一句今天的交易感受也可以；如果你想聊A股，也可以直接告诉我标的、涨跌和你现在最想做的动作。",
                 "references": [],
                 "used_reflection_count": 0
             }
 
+        if self._is_market_chat(message) and not market_context:
+            if not notes:
+                return {
+                    "reply": "如果你想聊A股行情，直接告诉我股票代码、今天大概涨跌多少，以及你现在想追、抄、割还是先躺着，我就能陪你一起把动作想清楚。",
+                    "references": [],
+                    "used_reflection_count": 0
+                }
+
         selected_notes = self._select_relevant_notes(notes, message)
-        context = self._build_context(selected_notes)
-        messages = self._build_messages(message, context)
+        reflection_context = self._build_context(selected_notes)
+        market_context_text = self._build_market_context_text(market_context)
+        messages = self._build_messages(
+            message=message,
+            reflection_context=reflection_context,
+            market_context=market_context_text,
+        )
         reply = await self.llm_service.generate_with_messages(messages)
         cleaned_reply = self._clean_reply(reply) or "今天先从一句最真实的感受开始也很好，我会继续陪你慢慢复盘。"
 
@@ -74,6 +91,8 @@ class ChatService:
         return score
 
     def _build_context(self, notes: list) -> str:
+        if not notes:
+            return "暂无复盘记录。"
         chunks = []
         for note in notes:
             chunks.append(
@@ -89,18 +108,45 @@ class ChatService:
             )
         return "\n\n".join(chunks)
 
-    def _build_messages(self, message: str, context: str) -> list[dict]:
+    def _build_market_context_text(self, market_context: dict | None) -> str:
+        if not market_context:
+            return "暂无A股行情数据。"
+
+        name = market_context.get("name") or ""
+        display_name = f"{name}（{market_context['symbol']}）" if name else market_context["symbol"]
+        user_hint_parts = []
+        if market_context.get("user_change_hint"):
+            user_hint_parts.append(f"用户口述涨跌：{market_context['user_change_hint']}")
+        if market_context.get("user_intent"):
+            user_hint_parts.append(f"用户当前动作倾向：{market_context['user_intent']}")
+        user_hint = "；".join(user_hint_parts) if user_hint_parts else "用户没有明确说出动作或涨跌幅。"
+
+        return (
+            f"标的：{display_name}\n"
+            f"最近交易日：{market_context.get('trade_date') or '未知'}\n"
+            f"收盘价：{market_context.get('close')}\n"
+            f"涨跌幅：{market_context.get('pct_chg')}%\n"
+            f"涨跌额：{market_context.get('change')}\n"
+            f"日内区间：{market_context.get('low')} - {market_context.get('high')}\n"
+            f"成交量：{market_context.get('vol')}\n"
+            f"成交额：{market_context.get('amount')}\n"
+            f"{user_hint}"
+        )
+
+    def _build_messages(self, message: str, reflection_context: str, market_context: str) -> list[dict]:
         system_prompt = """
 你叫小稳教练，是一位温和、稳定、值得信赖的交易复盘陪伴教练。
-你只能基于用户提供的问题，以及上下文里的复盘记录来回答；如果上下文里没有足够信息，要明确说“这一点我暂时还看不出来”。
+你只能基于用户提供的问题，以及上下文里的复盘记录和A股事实数据来回答；如果上下文里没有足够信息，要明确说“这一点我暂时还看不出来”。
 
 回答时必须遵守：
 1 语气温和，先肯定用户愿意复盘或提问这件事
-2 回答聚焦用户自己的交易行为和情绪模式，不发散
-3 不编造外部市场事实，不假装知道实时新闻、行情或财报
-4 不给具体股票买卖建议，不做确定性判断
-5 尽量给一个用户明天就能做到的小动作
-6 控制在180字以内，像聊天，不要用 markdown，不要分标题，不要换行
+2 回答优先聚焦用户自己的交易行为、情绪模式和风险节奏
+3 只有在上下文里明确给出A股事实数据时，才能引用行情；绝不能编造实时新闻、行情或财报
+4 如果用户在聊A股，但缺少股票代码、涨跌幅或动作倾向，就礼貌追问这三项里缺的关键信息
+5 不给确定性的买卖指令，不替用户下结论，只做条件化提醒和风控陪伴
+6 尽量给一个用户明天或下一笔交易就能做到的小动作
+7 如果有行情数据，先用一句人话解释当前局面，再回到用户的情绪与执行
+8 控制在180字以内，像聊天，不要用 markdown，不要分标题，不要换行
 """
 
         user_prompt = f"""
@@ -108,7 +154,10 @@ class ChatService:
 {message}
 
 这是用户最近的相关复盘记录：
-{context}
+{reflection_context}
+
+这是当前可用的A股事实数据：
+{market_context}
 
 请基于这些记录，像“小稳教练”一样给出一段自然、温和、鼓励式的回复。
 """
@@ -132,6 +181,13 @@ class ChatService:
         if len(text) > 180:
             text = text[:180].rstrip()
         return text
+
+    def _is_market_chat(self, text: str) -> bool:
+        keywords = [
+            "行情", "A股", "大盘", "涨", "跌", "追", "抄", "割", "躺", "股票",
+            "仓位", "止损", "买", "卖", "代码", "个股", "上证", "深证", "创业板"
+        ]
+        return any(keyword in text for keyword in keywords)
 
     def _extract_feedback_summary(self, ai_feedback: str | None) -> str:
         if not ai_feedback:

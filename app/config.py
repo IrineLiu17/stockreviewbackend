@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     DEEPSEEK_API_KEY: str = ""
     LLM_PROVIDER: str = "deepseek"  # "openai" or "deepseek"
     
+    # China market data
+    TUSHARE_TOKEN: str = ""
+    
     # JWT
     JWT_SECRET: str
     JWT_ALGORITHM: str = "HS256"
