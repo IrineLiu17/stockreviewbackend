@@ -18,6 +18,8 @@ def get_supabase() -> Client:
 
 async def get_db_pool():
     """Get async PostgreSQL connection pool"""
+    if not settings.DATABASE_URL:
+        raise ValueError("DATABASE_URL not set")
     return await asyncpg.create_pool(settings.DATABASE_URL)
 
 async def init_db():

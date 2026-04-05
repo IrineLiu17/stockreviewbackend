@@ -11,7 +11,9 @@ class Settings(BaseSettings):
     SUPABASE_SERVICE_KEY: str
     
     # Database
-    DATABASE_URL: str
+    # Optional for MVP: most operations use Supabase HTTP APIs.
+    # Only required if you use asyncpg features / direct Postgres access.
+    DATABASE_URL: str = ""
     
     # OpenAI/DeepSeek
     OPENAI_API_KEY: str = ""
