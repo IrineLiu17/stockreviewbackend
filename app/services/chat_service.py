@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from typing import AsyncIterator
 
 from app.services.china_market_data_service import ChinaMarketDataService
 from app.services.note_service import NoteService
@@ -20,6 +21,56 @@ class ChatService:
         self.market_data_service = ChinaMarketDataService()
 
     async def chat_with_coach(self, user_id: str, message: str) -> dict:
+        prepared = await self._prepare_chat(user_id, message)
+
+        if prepared["immediate_reply"]:
+            return {
+                "reply": prepared["immediate_reply"],
+                "references": [],
+                "used_reflection_count": 0,
+            }
+
+        reply = await self.llm_service.generate_with_messages(prepared["messages"])
+        cleaned_reply = self._clean_reply(reply) or "今天先从一句最真实的感受开始也很好，我会继续陪你慢慢复盘。"
+
+        return {
+            "reply": cleaned_reply,
+            "references": prepared["references"],
+            "used_reflection_count": prepared["used_reflection_count"]
+        }
+
+    async def stream_chat_with_coach(self, user_id: str, message: str) -> AsyncIterator[dict]:
+        prepared = await self._prepare_chat(user_id, message)
+
+        if prepared["immediate_reply"]:
+            yield {
+                "type": "chunk",
+                "chunk": prepared["immediate_reply"],
+            }
+            yield {
+                "type": "done",
+                "references": [],
+                "used_reflection_count": 0,
+            }
+            return
+
+        collected = ""
+        async for chunk in self.llm_service.generate_with_messages_stream(prepared["messages"]):
+            collected += chunk
+            yield {
+                "type": "chunk",
+                "chunk": chunk,
+            }
+
+        final_text = self._clean_reply(collected) or "今天先从一句最真实的感受开始也很好，我会继续陪你慢慢复盘。"
+        yield {
+            "type": "done",
+            "reply": final_text,
+            "references": prepared["references"],
+            "used_reflection_count": prepared["used_reflection_count"],
+        }
+
+    async def _prepare_chat(self, user_id: str, message: str) -> dict:
         notes = await self.note_service.list_notes(user_id=user_id, limit=12)
         market_chat = self._is_market_chat(message)
         wants_fundamental = self._wants_fundamental_analysis(message)
@@ -33,23 +84,26 @@ class ChatService:
 
         if not notes and not market_context:
             return {
-                "reply": "我是小稳教练。你还没有复盘记录，先随便写一句今天的交易感受也可以；如果你想聊A股，也可以直接告诉我标的、涨跌和你现在最想做的动作。",
+                "immediate_reply": "我是小稳教练。你还没有复盘记录，先随便写一句今天的交易感受也可以；如果你想聊A股，也可以直接告诉我标的、涨跌和你现在最想做的动作。",
+                "messages": [],
                 "references": [],
-                "used_reflection_count": 0
+                "used_reflection_count": 0,
             }
 
         if self._is_recommend_request(message) and not market_context:
             return {
-                "reply": "我不直接替你推荐股票，但如果你给我一只A股代码，或告诉我你更想找稳一点、成长一点还是低估值一点的票，我可以按框架陪你拆开看。",
+                "immediate_reply": "我不直接替你推荐股票，但如果你给我一只A股代码，或告诉我你更想找稳一点、成长一点还是低估值一点的票，我可以按框架陪你拆开看。",
+                "messages": [],
                 "references": [],
-                "used_reflection_count": 0
+                "used_reflection_count": 0,
             }
 
         if market_chat and not market_context:
             return {
-                "reply": "如果你想聊这只A股，告诉我股票代码、今天大概涨跌多少，以及你现在更想追、抄、割还是先躺着，我再陪你把这笔动作拆开看。",
+                "immediate_reply": "如果你想聊这只A股，告诉我股票代码、今天大概涨跌多少，以及你现在更想追、抄、割还是先躺着，我再陪你把这笔动作拆开看。",
+                "messages": [],
                 "references": [],
-                "used_reflection_count": 0
+                "used_reflection_count": 0,
             }
 
         selected_notes = self._select_relevant_notes(notes, message)
@@ -63,13 +117,12 @@ class ChatService:
             fundamental_context=fundamental_context_text,
             analysis_mode=analysis_mode,
         )
-        reply = await self.llm_service.generate_with_messages(messages)
-        cleaned_reply = self._clean_reply(reply) or "今天先从一句最真实的感受开始也很好，我会继续陪你慢慢复盘。"
-
+        references = list(dict.fromkeys(self._format_reference(note.date) for note in selected_notes))
         return {
-            "reply": cleaned_reply,
-            "references": list(dict.fromkeys(self._format_reference(note.date) for note in selected_notes)),
-            "used_reflection_count": len(selected_notes)
+            "immediate_reply": "",
+            "messages": messages,
+            "references": references,
+            "used_reflection_count": len(selected_notes),
         }
 
     def _select_relevant_notes(self, notes: list, message: str) -> list:

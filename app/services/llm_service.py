@@ -59,6 +59,48 @@ class LLMService:
             data = response.json()
             return (data.get("choices") or [{}])[0].get("message", {}).get("content", "")
 
+    async def generate_with_messages_stream(self, messages: list[dict]) -> AsyncIterator[str]:
+        """Stream completion with system + user messages."""
+        if not self.api_key:
+            raise ValueError("DEEPSEEK_API_KEY or OPENAI_API_KEY not set")
+
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            url = f"{self.base_url}/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "model": self.model,
+                "messages": messages,
+                "temperature": 0.5,
+                "stream": True
+            }
+
+            async with client.stream("POST", url, headers=headers, json=payload) as response:
+                response.raise_for_status()
+
+                async for line in response.aiter_lines():
+                    if not line.strip() or not line.startswith("data: "):
+                        continue
+
+                    data_str = line[6:].strip()
+                    if data_str == "[DONE]":
+                        break
+
+                    try:
+                        data = json.loads(data_str)
+                    except json.JSONDecodeError:
+                        continue
+
+                    choices = data.get("choices") or []
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta", {}) or {}
+                    content = delta.get("content") or ""
+                    if content:
+                        yield content
+
     async def stream_analysis(self, note, context: dict) -> AsyncIterator[str]:
         """Stream analysis (typing effect) for the AgentService stream endpoint."""
         if not self.api_key:

@@ -1,7 +1,10 @@
 """
 Chat routes - MVP coach chat based on recent reflection history.
 """
+import json
+
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 
 from app.middleware.auth import get_current_user
 from app.models import CoachChatRequest, CoachChatResponse
@@ -25,3 +28,28 @@ async def chat_with_coach(
         return CoachChatResponse(**result)
     except Exception as exc:
         raise HTTPException(status_code=503, detail="小稳教练暂时无法回复，请稍后再试") from exc
+
+
+@router.post("/coach/stream")
+async def stream_chat_with_coach(
+    body: CoachChatRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """Stream chat with XiaoWen coach for better perceived latency."""
+    service = ChatService()
+
+    async def event_generator():
+        try:
+            async for event in service.stream_chat_with_coach(
+                user_id=current_user["user_id"],
+                message=body.message.strip()
+            ):
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except Exception:
+            error_event = {
+                "type": "error",
+                "message": "小稳教练暂时无法回复，请稍后再试",
+            }
+            yield f"data: {json.dumps(error_event, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
