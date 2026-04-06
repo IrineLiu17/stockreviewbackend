@@ -12,6 +12,10 @@ from typing import Optional
 class ChinaMarketDataService:
     """Small A-share quote helper for chat enrichment."""
 
+    def __init__(self):
+        self.last_market_debug = ""
+        self.last_fundamental_debug = ""
+
     def extract_symbol(self, text: str) -> Optional[str]:
         patterns = [
             r"\b(6\d{5}|0\d{5}|3\d{5})\b",
@@ -53,12 +57,16 @@ class ChinaMarketDataService:
     async def get_market_context(self, text: str) -> Optional[dict]:
         symbol = self.extract_symbol(text)
         if not symbol:
+            self.last_market_debug = "未识别到 6 位 A 股代码"
             print("[ChinaMarketDataService] No symbol found in user message")
             return None
 
+        self.last_market_debug = f"开始请求 AkShare 行情: {symbol}"
         print(f"[ChinaMarketDataService] Requesting AkShare quote for {symbol}")
         quote = await asyncio.to_thread(self._fetch_akshare_quote_sync, symbol)
         if not quote:
+            if not self.last_market_debug:
+                self.last_market_debug = f"AkShare 行情未返回有效数据: {symbol}"
             print(f"[ChinaMarketDataService] No quote data available for {symbol}")
             return None
 
@@ -66,14 +74,17 @@ class ChinaMarketDataService:
         quote["user_intent"] = self.extract_user_intent(text)
         quote["user_change_hint"] = self.extract_change_hint(text)
         quote["source"] = "akshare"
+        self.last_market_debug = f"AkShare 行情成功: {symbol}"
         print(f"[ChinaMarketDataService] AkShare quote success for {symbol}")
         return quote
 
     async def get_fundamental_context(self, text: str) -> Optional[dict]:
         symbol = self.extract_symbol(text)
         if not symbol:
+            self.last_fundamental_debug = "未识别到 6 位 A 股代码"
             return None
 
+        self.last_fundamental_debug = f"开始请求 AkShare 基本面: {symbol}"
         print(f"[ChinaMarketDataService] Requesting AkShare fundamentals for {symbol}")
         spot_snapshot, finance = await asyncio.gather(
             asyncio.to_thread(self._fetch_akshare_fundamental_snapshot_sync, symbol),
@@ -81,6 +92,8 @@ class ChinaMarketDataService:
         )
 
         if not spot_snapshot and not finance:
+            if not self.last_fundamental_debug:
+                self.last_fundamental_debug = f"AkShare 基本面未返回有效数据: {symbol}"
             print(f"[ChinaMarketDataService] No fundamental data available for {symbol}")
             return None
 
@@ -89,6 +102,7 @@ class ChinaMarketDataService:
             merged.update(spot_snapshot)
         if finance:
             merged.update(finance)
+        self.last_fundamental_debug = f"AkShare 基本面成功: {symbol}"
         print(f"[ChinaMarketDataService] AkShare fundamentals success for {symbol}")
         return merged
 
@@ -161,13 +175,16 @@ class ChinaMarketDataService:
             else:
                 spot_df = ak.stock_zh_a_spot_em()
         except Exception as exc:
+            self.last_market_debug = f"AkShare 市场快照请求失败: {exc}"
             print(f"[ChinaMarketDataService] AkShare market snapshot failed for {symbol}: {exc}")
             return None
 
         if spot_df is None or spot_df.empty:
+            self.last_market_debug = f"AkShare 市场快照为空: {symbol}"
             return None
         matched = spot_df[spot_df["代码"].astype(str) == symbol]
         if matched.empty:
+            self.last_market_debug = f"AkShare 市场快照里未找到代码: {symbol}"
             print(f"[ChinaMarketDataService] AkShare market snapshot empty for {symbol}")
             return None
         return matched.iloc[0]
@@ -178,10 +195,12 @@ class ChinaMarketDataService:
         try:
             df = ak.stock_financial_analysis_indicator(symbol=symbol)
         except Exception as exc:
+            self.last_fundamental_debug = f"AkShare 财务指标请求失败: {exc}"
             print(f"[ChinaMarketDataService] AkShare financial lookup failed for {symbol}: {exc}")
             return None
 
         if df is None or df.empty:
+            self.last_fundamental_debug = f"AkShare 财务指标为空: {symbol}"
             return None
 
         latest = df.iloc[0]

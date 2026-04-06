@@ -74,3 +74,4 @@ class CoachChatResponse(BaseModel):
     reply: str
     references: list[str] = []
     used_reflection_count: int = 0
+    debug: Optional[str] = None

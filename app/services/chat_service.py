@@ -28,6 +28,7 @@ class ChatService:
                 "reply": prepared["immediate_reply"],
                 "references": [],
                 "used_reflection_count": 0,
+                "debug": prepared["debug"],
             }
 
         reply = await self.llm_service.generate_with_messages(prepared["messages"])
@@ -36,7 +37,8 @@ class ChatService:
         return {
             "reply": cleaned_reply,
             "references": prepared["references"],
-            "used_reflection_count": prepared["used_reflection_count"]
+            "used_reflection_count": prepared["used_reflection_count"],
+            "debug": prepared["debug"],
         }
 
     async def stream_chat_with_coach(self, user_id: str, message: str) -> AsyncIterator[dict]:
@@ -51,6 +53,7 @@ class ChatService:
                 "type": "done",
                 "references": [],
                 "used_reflection_count": 0,
+                "debug": prepared["debug"],
             }
             return
 
@@ -68,6 +71,7 @@ class ChatService:
             "reply": final_text,
             "references": prepared["references"],
             "used_reflection_count": prepared["used_reflection_count"],
+            "debug": prepared["debug"],
         }
 
     async def _prepare_chat(self, user_id: str, message: str) -> dict:
@@ -80,6 +84,13 @@ class ChatService:
         if wants_fundamental:
             fundamental_context = await self.market_data_service.get_fundamental_context(message)
 
+        debug_parts = []
+        if market_chat:
+            debug_parts.append(self.market_data_service.last_market_debug or "未触发行情调试")
+        if wants_fundamental:
+            debug_parts.append(self.market_data_service.last_fundamental_debug or "未触发基本面调试")
+        debug_info = " | ".join(part for part in debug_parts if part)
+
         analysis_mode = self._is_analysis_mode(message, market_context, fundamental_context)
 
         if not notes and not market_context:
@@ -88,6 +99,7 @@ class ChatService:
                 "messages": [],
                 "references": [],
                 "used_reflection_count": 0,
+                "debug": debug_info,
             }
 
         if self._is_recommend_request(message) and not market_context:
@@ -96,6 +108,7 @@ class ChatService:
                 "messages": [],
                 "references": [],
                 "used_reflection_count": 0,
+                "debug": debug_info,
             }
 
         if market_chat and not market_context:
@@ -104,6 +117,7 @@ class ChatService:
                 "messages": [],
                 "references": [],
                 "used_reflection_count": 0,
+                "debug": debug_info,
             }
 
         selected_notes = self._select_relevant_notes(notes, message)
@@ -123,6 +137,7 @@ class ChatService:
             "messages": messages,
             "references": references,
             "used_reflection_count": len(selected_notes),
+            "debug": debug_info,
         }
 
     def _select_relevant_notes(self, notes: list, message: str) -> list:
