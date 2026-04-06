@@ -21,9 +21,14 @@ class ChatService:
 
     async def chat_with_coach(self, user_id: str, message: str) -> dict:
         notes = await self.note_service.list_notes(user_id=user_id, limit=12)
-        market_context = await self.market_data_service.get_market_context(message)
-        fundamental_context = await self.market_data_service.get_fundamental_context(message)
         market_chat = self._is_market_chat(message)
+        wants_fundamental = self._wants_fundamental_analysis(message)
+
+        market_context = await self.market_data_service.get_market_context(message)
+        fundamental_context = None
+        if wants_fundamental:
+            fundamental_context = await self.market_data_service.get_fundamental_context(message)
+
         analysis_mode = self._is_analysis_mode(message, market_context, fundamental_context)
 
         if not notes and not market_context:
@@ -229,7 +234,8 @@ class ChatService:
 3 如果有基本面数据，就用1到2个最关键指标说人话，不要堆术语
 4 不直接推荐买哪只股票，不给确定性买卖指令，不承诺收益
 5 要指出一个主要风险，再给一个可执行的观察点
-6 像聊天，不要 markdown，不要分标题，不要换行，控制在220字以内
+6 直接进入判断，不要先说套话，不要用“看到你...”这类客服式开场
+7 像聊天，不要 markdown，不要分标题，不要换行，控制在220字以内
 """
         return """
 你叫小稳教练，是一位温和、稳定、值得信赖的交易复盘陪伴教练。
@@ -270,6 +276,14 @@ class ChatService:
         return bool(market_context or fundamental_context) and any(
             keyword.lower() in text.lower() for keyword in analysis_keywords
         )
+
+    def _wants_fundamental_analysis(self, text: str) -> bool:
+        keywords = [
+            "基本面", "分析", "估值", "财务", "业绩", "roe", "pe", "pb",
+            "怎么看", "这票", "这只股", "还能拿吗", "能买吗", "值不值", "行业"
+        ]
+        lowered = text.lower()
+        return any(keyword.lower() in lowered for keyword in keywords)
 
     def _is_recommend_request(self, text: str) -> bool:
         keywords = ["推荐", "荐股", "还有什么股", "买什么股", "推一个股"]
