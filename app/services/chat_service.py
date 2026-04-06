@@ -25,7 +25,7 @@ class ChatService:
 
         if prepared["immediate_reply"]:
             return {
-                "reply": prepared["immediate_reply"],
+                "reply": self._attach_debug(prepared["immediate_reply"], prepared["debug"]),
                 "references": [],
                 "used_reflection_count": 0,
                 "debug": prepared["debug"],
@@ -35,7 +35,7 @@ class ChatService:
         cleaned_reply = self._clean_reply(reply) or "今天先从一句最真实的感受开始也很好，我会继续陪你慢慢复盘。"
 
         return {
-            "reply": cleaned_reply,
+            "reply": self._attach_debug(cleaned_reply, prepared["debug"]),
             "references": prepared["references"],
             "used_reflection_count": prepared["used_reflection_count"],
             "debug": prepared["debug"],
@@ -47,7 +47,7 @@ class ChatService:
         if prepared["immediate_reply"]:
             yield {
                 "type": "chunk",
-                "chunk": prepared["immediate_reply"],
+                "chunk": self._attach_debug(prepared["immediate_reply"], prepared["debug"]),
             }
             yield {
                 "type": "done",
@@ -68,7 +68,7 @@ class ChatService:
         final_text = self._clean_reply(collected) or "今天先从一句最真实的感受开始也很好，我会继续陪你慢慢复盘。"
         yield {
             "type": "done",
-            "reply": final_text,
+            "reply": self._attach_debug(final_text, prepared["debug"]),
             "references": prepared["references"],
             "used_reflection_count": prepared["used_reflection_count"],
             "debug": prepared["debug"],
@@ -289,6 +289,11 @@ class ChatService:
         if len(text) > 180:
             text = text[:180].rstrip()
         return text
+
+    def _attach_debug(self, reply: str, debug: str) -> str:
+        if not debug:
+            return reply
+        return f"{reply} [调试: {debug}]"
 
     def _build_system_prompt(self, analysis_mode: bool) -> str:
         if analysis_mode:
