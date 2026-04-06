@@ -40,6 +40,11 @@ async def stream_chat_with_coach(
 
     async def event_generator():
         try:
+            status_event = {
+                "type": "status",
+                "message": "服务器已收到请求，正在准备上下文",
+            }
+            yield f"data: {json.dumps(status_event, ensure_ascii=False)}\n\n"
             async for event in service.stream_chat_with_coach(
                 user_id=current_user["user_id"],
                 message=body.message.strip()

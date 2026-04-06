@@ -12,6 +12,9 @@ from typing import Optional
 class ChinaMarketDataService:
     """Small A-share quote helper for chat enrichment."""
 
+    MARKET_TIMEOUT_SECONDS = 6
+    FUNDAMENTAL_TIMEOUT_SECONDS = 8
+
     def __init__(self):
         self.last_market_debug = ""
         self.last_fundamental_debug = ""
@@ -63,7 +66,15 @@ class ChinaMarketDataService:
 
         self.last_market_debug = f"开始请求 AkShare 行情: {symbol}"
         print(f"[ChinaMarketDataService] Requesting AkShare quote for {symbol}")
-        quote = await asyncio.to_thread(self._fetch_akshare_quote_sync, symbol)
+        try:
+            quote = await asyncio.wait_for(
+                asyncio.to_thread(self._fetch_akshare_quote_sync, symbol),
+                timeout=self.MARKET_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            self.last_market_debug = f"AkShare 行情请求超时({self.MARKET_TIMEOUT_SECONDS}s): {symbol}"
+            print(f"[ChinaMarketDataService] AkShare quote timeout for {symbol}")
+            return None
         if not quote:
             if not self.last_market_debug:
                 self.last_market_debug = f"AkShare 行情未返回有效数据: {symbol}"
@@ -86,10 +97,18 @@ class ChinaMarketDataService:
 
         self.last_fundamental_debug = f"开始请求 AkShare 基本面: {symbol}"
         print(f"[ChinaMarketDataService] Requesting AkShare fundamentals for {symbol}")
-        spot_snapshot, finance = await asyncio.gather(
-            asyncio.to_thread(self._fetch_akshare_fundamental_snapshot_sync, symbol),
-            asyncio.to_thread(self._fetch_akshare_financial_sync, symbol),
-        )
+        try:
+            spot_snapshot, finance = await asyncio.wait_for(
+                asyncio.gather(
+                    asyncio.to_thread(self._fetch_akshare_fundamental_snapshot_sync, symbol),
+                    asyncio.to_thread(self._fetch_akshare_financial_sync, symbol),
+                ),
+                timeout=self.FUNDAMENTAL_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            self.last_fundamental_debug = f"AkShare 基本面请求超时({self.FUNDAMENTAL_TIMEOUT_SECONDS}s): {symbol}"
+            print(f"[ChinaMarketDataService] AkShare fundamentals timeout for {symbol}")
+            return None
 
         if not spot_snapshot and not finance:
             if not self.last_fundamental_debug:
