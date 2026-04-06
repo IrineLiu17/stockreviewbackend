@@ -75,18 +75,18 @@ class ChinaMarketDataService:
             return None
 
         print(f"[ChinaMarketDataService] Requesting AkShare fundamentals for {symbol}")
-        profile, finance = await asyncio.gather(
-            asyncio.to_thread(self._fetch_akshare_profile_sync, symbol),
+        spot_snapshot, finance = await asyncio.gather(
+            asyncio.to_thread(self._fetch_akshare_fundamental_snapshot_sync, symbol),
             asyncio.to_thread(self._fetch_akshare_financial_sync, symbol),
         )
 
-        if not profile and not finance:
+        if not spot_snapshot and not finance:
             print(f"[ChinaMarketDataService] No fundamental data available for {symbol}")
             return None
 
         merged = {"symbol": symbol, "source": "akshare"}
-        if profile:
-            merged.update(profile)
+        if spot_snapshot:
+            merged.update(spot_snapshot)
         if finance:
             merged.update(finance)
         print(f"[ChinaMarketDataService] AkShare fundamentals success for {symbol}")
@@ -95,22 +95,33 @@ class ChinaMarketDataService:
     def _fetch_akshare_quote_sync(self, symbol: str) -> Optional[dict]:
         import akshare as ak
 
-        hist_df = ak.stock_zh_a_hist(symbol=symbol, period="daily", adjust="")
+        spot_row = self._fetch_akshare_market_row_sync(symbol)
+        if spot_row:
+            return {
+                "name": str(spot_row.get("名称", "") or ""),
+                "trade_date": "",
+                "open": self._to_float(spot_row.get("今开")),
+                "close": self._to_float(spot_row.get("最新价")),
+                "high": self._to_float(spot_row.get("最高")),
+                "low": self._to_float(spot_row.get("最低")),
+                "change": self._to_float(spot_row.get("涨跌额")),
+                "pct_chg": self._to_float(spot_row.get("涨跌幅")),
+                "vol": self._to_float(spot_row.get("成交量")),
+                "amount": self._to_float(spot_row.get("成交额")),
+            }
+
+        # Fallback to historical daily data if spot fails.
+        try:
+            hist_df = ak.stock_zh_a_hist(symbol=symbol, period="daily", adjust="")
+        except Exception as exc:
+            print(f"[ChinaMarketDataService] AkShare hist quote failed for {symbol}: {exc}")
+            return None
         if hist_df is None or hist_df.empty:
             return None
 
         latest = hist_df.iloc[-1]
-        spot_name = ""
-        try:
-            spot_df = ak.stock_zh_a_spot_em()
-            matched = spot_df[spot_df["代码"].astype(str) == symbol]
-            if not matched.empty:
-                spot_name = str(matched.iloc[0].get("名称", ""))
-        except Exception as exc:
-            print(f"[ChinaMarketDataService] AkShare spot lookup failed for {symbol}: {exc}")
-
         return {
-            "name": spot_name,
+            "name": "",
             "trade_date": str(latest.get("日期", "")).replace("-", ""),
             "open": self._to_float(latest.get("开盘")),
             "close": self._to_float(latest.get("收盘")),
@@ -122,32 +133,44 @@ class ChinaMarketDataService:
             "amount": self._to_float(latest.get("成交额")),
         }
 
-    def _fetch_akshare_profile_sync(self, symbol: str) -> Optional[dict]:
+    def _fetch_akshare_fundamental_snapshot_sync(self, symbol: str) -> Optional[dict]:
+        spot_row = self._fetch_akshare_market_row_sync(symbol)
+        if not spot_row:
+            return None
+
+        return {
+            "name": str(spot_row.get("名称", "") or ""),
+            "industry": "",
+            "market": self._market_label(symbol),
+            "list_date": "",
+            "total_mv": self._to_float(spot_row.get("总市值")),
+            "circ_mv": self._to_float(spot_row.get("流通市值")),
+            "pe_ttm": self._to_float(spot_row.get("市盈率-动态")),
+            "pb": self._to_float(spot_row.get("市净率")),
+            "turnover_rate": self._to_float(spot_row.get("换手率")),
+        }
+
+    def _fetch_akshare_market_row_sync(self, symbol: str):
         import akshare as ak
 
         try:
-            info_df = ak.stock_individual_info_em(symbol=symbol)
+            if symbol.startswith("6"):
+                spot_df = ak.stock_sh_a_spot_em()
+            elif symbol.startswith(("0", "3")):
+                spot_df = ak.stock_sz_a_spot_em()
+            else:
+                spot_df = ak.stock_zh_a_spot_em()
         except Exception as exc:
-            print(f"[ChinaMarketDataService] AkShare profile lookup failed for {symbol}: {exc}")
+            print(f"[ChinaMarketDataService] AkShare market snapshot failed for {symbol}: {exc}")
             return None
 
-        if info_df is None or info_df.empty:
+        if spot_df is None or spot_df.empty:
             return None
-
-        mapping = {
-            str(row["item"]).strip(): row["value"]
-            for _, row in info_df.iterrows()
-            if "item" in info_df.columns and "value" in info_df.columns
-        }
-
-        return {
-            "name": str(mapping.get("股票简称", "") or ""),
-            "industry": str(mapping.get("行业", "") or ""),
-            "market": str(mapping.get("上市时间", "") or ""),
-            "list_date": str(mapping.get("上市时间", "") or ""),
-            "total_mv": self._to_float(mapping.get("总市值")),
-            "circ_mv": self._to_float(mapping.get("流通市值")),
-        }
+        matched = spot_df[spot_df["代码"].astype(str) == symbol]
+        if matched.empty:
+            print(f"[ChinaMarketDataService] AkShare market snapshot empty for {symbol}")
+            return None
+        return matched.iloc[0]
 
     def _fetch_akshare_financial_sync(self, symbol: str) -> Optional[dict]:
         import akshare as ak
@@ -180,6 +203,13 @@ class ChinaMarketDataService:
                 if value is not None:
                     return value
         return None
+
+    def _market_label(self, symbol: str) -> str:
+        if symbol.startswith("6"):
+            return "沪A"
+        if symbol.startswith(("0", "3")):
+            return "深A"
+        return "A股"
 
     def _to_float(self, value) -> Optional[float]:
         try:
