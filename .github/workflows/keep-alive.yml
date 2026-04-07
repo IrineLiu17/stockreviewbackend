@@ -1,0 +1,24 @@
+name: Keep Render Awake
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Ping root endpoint
+        run: |
+          curl --fail --silent --show-error \
+            --max-time 30 \
+            https://stockreviewbackend.onrender.com/
+
+      - name: Ping health endpoint
+        run: |
+          curl --fail --silent --show-error \
+            --max-time 30 \
+            https://stockreviewbackend.onrender.com/api/health
