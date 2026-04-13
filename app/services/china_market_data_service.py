@@ -21,8 +21,8 @@ class ChinaMarketDataService:
 
     def extract_symbol(self, text: str) -> Optional[str]:
         patterns = [
-            r"\b(6\d{5}|0\d{5}|3\d{5})\b",
-            r"\b(?:sh|sz|SH|SZ)[ .-]?(\d{6})\b",
+            r"(?<!\d)(6\d{5}|0\d{5}|3\d{5})(?!\d)",
+            r"(?i)(?:^|[^a-z0-9])(?:sh|sz)[ .-]?(\d{6})(?!\d)",
         ]
         for pattern in patterns:
             match = re.search(pattern, text)
