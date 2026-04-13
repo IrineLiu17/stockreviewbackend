@@ -128,19 +128,19 @@ class ChinaMarketDataService:
     def _fetch_akshare_quote_sync(self, symbol: str) -> Optional[dict]:
         import akshare as ak
 
-        spot_row = self._fetch_akshare_market_row_sync(symbol)
-        if spot_row:
+        snapshot = self._fetch_single_stock_snapshot_sync(symbol)
+        if snapshot:
             return {
-                "name": str(spot_row.get("名称", "") or ""),
+                "name": str(snapshot.get("name", "") or ""),
                 "trade_date": "",
-                "open": self._to_float(spot_row.get("今开")),
-                "close": self._to_float(spot_row.get("最新价")),
-                "high": self._to_float(spot_row.get("最高")),
-                "low": self._to_float(spot_row.get("最低")),
-                "change": self._to_float(spot_row.get("涨跌额")),
-                "pct_chg": self._to_float(spot_row.get("涨跌幅")),
-                "vol": self._to_float(spot_row.get("成交量")),
-                "amount": self._to_float(spot_row.get("成交额")),
+                "open": self._to_float(snapshot.get("open")),
+                "close": self._to_float(snapshot.get("price")),
+                "high": self._to_float(snapshot.get("high")),
+                "low": self._to_float(snapshot.get("low")),
+                "change": self._to_float(snapshot.get("change")),
+                "pct_chg": self._to_float(snapshot.get("pct_chg")),
+                "vol": self._to_float(snapshot.get("volume")),
+                "amount": self._to_float(snapshot.get("amount")),
             }
 
         # Fallback to historical daily data if spot fails.
@@ -167,46 +167,72 @@ class ChinaMarketDataService:
         }
 
     def _fetch_akshare_fundamental_snapshot_sync(self, symbol: str) -> Optional[dict]:
-        spot_row = self._fetch_akshare_market_row_sync(symbol)
-        if not spot_row:
+        snapshot = self._fetch_single_stock_snapshot_sync(symbol)
+        if not snapshot:
             return None
 
         return {
-            "name": str(spot_row.get("名称", "") or ""),
-            "industry": "",
+            "name": str(snapshot.get("name", "") or ""),
+            "industry": str(snapshot.get("industry", "") or ""),
             "market": self._market_label(symbol),
             "list_date": "",
-            "total_mv": self._to_float(spot_row.get("总市值")),
-            "circ_mv": self._to_float(spot_row.get("流通市值")),
-            "pe_ttm": self._to_float(spot_row.get("市盈率-动态")),
-            "pb": self._to_float(spot_row.get("市净率")),
-            "turnover_rate": self._to_float(spot_row.get("换手率")),
+            "total_mv": self._to_float(snapshot.get("market_value")),
+            "circ_mv": self._to_float(snapshot.get("float_market_value")),
+            "pe_ttm": self._to_float(snapshot.get("pe_ttm")),
+            "pb": self._to_float(snapshot.get("pb")),
+            "turnover_rate": self._to_float(snapshot.get("turnover_rate")),
         }
 
-    def _fetch_akshare_market_row_sync(self, symbol: str):
+    def _fetch_single_stock_snapshot_sync(self, symbol: str) -> Optional[dict]:
         import akshare as ak
 
         try:
-            if symbol.startswith("6"):
-                spot_df = ak.stock_sh_a_spot_em()
-            elif symbol.startswith(("0", "3")):
-                spot_df = ak.stock_sz_a_spot_em()
-            else:
-                spot_df = ak.stock_zh_a_spot_em()
+            quote_df = ak.stock_bid_ask_em(symbol=symbol)
         except Exception as exc:
-            self.last_market_debug = f"AkShare 市场快照请求失败: {exc}"
-            print(f"[ChinaMarketDataService] AkShare market snapshot failed for {symbol}: {exc}")
+            self.last_market_debug = f"AkShare 单股盘口请求失败: {exc}"
+            print(f"[ChinaMarketDataService] AkShare bid/ask failed for {symbol}: {exc}")
+            return None
+        if quote_df is None or quote_df.empty:
+            self.last_market_debug = f"AkShare 单股盘口为空: {symbol}"
             return None
 
-        if spot_df is None or spot_df.empty:
-            self.last_market_debug = f"AkShare 市场快照为空: {symbol}"
-            return None
-        matched = spot_df[spot_df["代码"].astype(str) == symbol]
-        if matched.empty:
-            self.last_market_debug = f"AkShare 市场快照里未找到代码: {symbol}"
-            print(f"[ChinaMarketDataService] AkShare market snapshot empty for {symbol}")
-            return None
-        return matched.iloc[0]
+        try:
+            info_df = ak.stock_individual_info_em(symbol=symbol, timeout=15)
+        except Exception as exc:
+            self.last_fundamental_debug = f"AkShare 个股信息请求失败: {exc}"
+            print(f"[ChinaMarketDataService] AkShare individual info failed for {symbol}: {exc}")
+            info_df = None
+
+        quote = self._frame_to_item_value_dict(quote_df)
+        info = self._frame_to_item_value_dict(info_df) if info_df is not None else {}
+
+        latest_price = (
+            info.get("最新")
+            or quote.get("最新")
+            or quote.get("最新价")
+            or quote.get("成交")
+        )
+
+        return {
+            "code": symbol,
+            "name": info.get("股票简称") or info.get("名称"),
+            "price": latest_price,
+            "industry": info.get("行业"),
+            "market_value": info.get("总市值"),
+            "float_market_value": info.get("流通市值"),
+            "buy_1": quote.get("buy_1") or quote.get("买一"),
+            "sell_1": quote.get("sell_1") or quote.get("卖一"),
+            "open": quote.get("今开"),
+            "high": quote.get("最高"),
+            "low": quote.get("最低"),
+            "change": quote.get("涨跌"),
+            "pct_chg": quote.get("涨幅") or quote.get("涨跌幅"),
+            "volume": quote.get("总手") or quote.get("成交量"),
+            "amount": quote.get("金额") or quote.get("成交额"),
+            "pe_ttm": info.get("市盈率-动态") or info.get("市盈率"),
+            "pb": info.get("市净率"),
+            "turnover_rate": info.get("换手率"),
+        }
 
     def _fetch_akshare_financial_sync(self, symbol: str) -> Optional[dict]:
         import akshare as ak
@@ -241,6 +267,24 @@ class ChinaMarketDataService:
                 if value is not None:
                     return value
         return None
+
+    def _frame_to_item_value_dict(self, df) -> dict:
+        if df is None or getattr(df, "empty", True):
+            return {}
+        columns = {str(column) for column in df.columns}
+        if {"item", "value"}.issubset(columns):
+            item_key, value_key = "item", "value"
+        elif {"项目", "值"}.issubset(columns):
+            item_key, value_key = "项目", "值"
+        elif {"item", "值"}.issubset(columns):
+            item_key, value_key = "item", "值"
+        else:
+            return {}
+        return {
+            str(row[item_key]).strip(): row[value_key]
+            for _, row in df.iterrows()
+            if str(row[item_key]).strip()
+        }
 
     def _market_label(self, symbol: str) -> str:
         if symbol.startswith("6"):
