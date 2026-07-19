@@ -5,7 +5,6 @@ import re
 from functools import lru_cache
 from typing import Any
 
-import akshare as ak
 from supabase import create_client
 
 from app.config import settings
@@ -33,6 +32,8 @@ class AssetMentionService:
     def _a_share_name_map() -> dict[str, str]:
         """Cache the exchange name list; it is refreshed with a new process."""
         try:
+            import akshare as ak
+
             frame = ak.stock_info_a_code_name()
             return {
                 str(row["名称"]).strip(): str(row["代码"]).zfill(6)
