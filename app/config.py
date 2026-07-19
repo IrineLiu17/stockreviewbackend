@@ -10,8 +10,9 @@ class Settings(BaseSettings):
     SUPABASE_KEY: str
     SUPABASE_SERVICE_KEY: str
     
-    # Database
-    DATABASE_URL: str
+    # Optional direct PostgreSQL connection. The current app uses Supabase's
+    # client APIs, so this is only needed if get_db_pool() is used later.
+    DATABASE_URL: str = ""
     
     # OpenAI/DeepSeek
     OPENAI_API_KEY: str = ""
