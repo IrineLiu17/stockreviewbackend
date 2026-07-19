@@ -9,3 +9,4 @@ httpx==0.24.1
 yfinance==0.2.28
 asyncpg==0.29.0
 redis==5.0.1
+akshare
