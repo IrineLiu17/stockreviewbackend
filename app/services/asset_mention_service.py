@@ -15,7 +15,8 @@ class AssetMentionService:
     TICKER_PATTERN = re.compile(r"(?<![A-Za-z])\$?([A-Z]{2,5})(?![A-Za-z])")
     TICKER_STOP_WORDS = {
         "ETF", "USD", "THE", "AND", "FOR", "WITH", "THIS", "THAT",
-        "BUY", "SELL", "HOLD", "LONG", "SHORT", "FOMO", "AI", "K", "OK"
+        "BUY", "SELL", "HOLD", "LONG", "SHORT", "FOMO", "AI", "K", "OK",
+        "NO", "YES", "NONE", "NOT", "NULL", "NAN", "NEW", "OLD"
     }
 
     def __init__(self):
