@@ -10,10 +10,15 @@ from typing import Optional
 supabase: Optional[Client] = None
 
 def get_supabase() -> Client:
-    """Get Supabase client"""
+    """Get the server-side Supabase client.
+
+    API routes authenticate the caller first and scope every query by user_id.
+    The service key is needed here because an anon client without the caller's
+    access token is filtered by RLS and cannot read the user's notes.
+    """
     global supabase
     if supabase is None:
-        supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
+        supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_KEY)
     return supabase
 
 async def get_db_pool():
